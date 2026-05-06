@@ -19,7 +19,7 @@ interaction_params = Dict(
     :w_soc => 0:0.05:1,
     :i_att => 0:0.05:1,
     :adoption_threshold => 0:0.05:1,
-    :activation_prob => 0:0.001:1# Finer steps for the prob to help you slow it down
+    :activation_prob => 0:0.001:1
 )
 
 

@@ -184,7 +184,7 @@ end
 
 
 t = @elapsed model = initialize_model(params)
-println("Initialisation : $t secondes")
+println("Initialization : $t secondes")
 
 t_sim = @elapsed run!(model, 360)
 println("Simulation : $t_sim secondes")
