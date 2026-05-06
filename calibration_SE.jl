@@ -45,10 +45,10 @@ function run_calibration()
             (0.2, 0.8), # w_soc
             (0.1, 0.5), # adoption_threshold
             (0.01, 0.2), # activation prob
-            (0.4, 0.6)  # i_att (PBC = 1 - i_att)
+            (0.2, 0.8)  # i_att (PBC = 1 - i_att)
         ],
         NumDimensions = 6,
-        MaxSteps = 1000 
+        MaxSteps = 100
     )
     return opt_res
 end
