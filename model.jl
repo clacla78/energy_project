@@ -1,15 +1,13 @@
-using Plots
+if !isdefined(Main, :Household)
+    include("types.jl")
+end
+
 
 function agent_step!(agent::Household, model::AgentBasedModel)
     t = abmtime(model)
     annee_actuelle = 2009 + floor(Int, t / 12)
     idx = clamp(annee_actuelle - 2009 + 1, 1, length(model.price_sell_series))
 
-    # Economic Logic with Avoided Costs
-    # Installation capacity
-  # installed_kWp = model.pv_efficiency * agent.roof_surface
-    
-   #base_cost = ((5523.0 / (installed_kWp^0.4862)) + 578.4) * installed_kWp
     current_investment_cost = agent.base_cost * exp(-model.learning_rate * t)
 
     # Avoided Cost: Savings = (Generation * Grid_Buy_Price) + (Excess_Sold * Sell_Price)
@@ -24,13 +22,10 @@ function agent_step!(agent::Household, model::AgentBasedModel)
     agent.u_eco = clamp((model.tpv - tpp) / model.tpv, 0, 1)
 
     # Social Logic
-    neighbors = nearby_agents(agent, model, 50.0) 
-   #count_n = count(n -> n.pv_installed, neighbors)
-    #otal_n = length(collect(neighbors))
-  # total_n = count(x -> true, neighbors) #a faster version
     n_pv = 0
     n_total = 0
-    for n in nearby_agents(agent, model, 50.0)
+    for n_id in agent.neighbors
+        n = model[n_id]
         n_total += 1
         if n.pv_installed
             n_pv += 1
@@ -41,12 +36,7 @@ function agent_step!(agent::Household, model::AgentBasedModel)
     agent.u_soc = n_total > 0 ? n_pv / n_total : 0.0
 
 
-    # Avoided CO2 for env calculation
 
-    #s_co2_bar = sum(a.co2_saving for a in allagents(model)) / nagents(model)
-    #agent.u_env = exp(scaled_diff) / (1.0 + exp(scaled_diff))
-    #println("DEBUG Agent $(agent.id) | CO2 Saving: $(agent.co2_saving) | Mean: $s_co2_bar | Diff: $diff | u_env: $(agent.u_env)")
-    
     agent.co2_saving = agent.pv_potential * 0.56 
     s_co2_bar = model.current_avg_co2 
     diff = agent.co2_saving - s_co2_bar
@@ -54,32 +44,9 @@ function agent_step!(agent::Household, model::AgentBasedModel)
 
     agent.u_env = 1.0 / (1.0 + exp(-scaled_diff))
 
-    inc_cap = get_inc_capability(agent, model)
+    inc_cap = get_inc_capability(agent.household_income, model.max_income)
     score = calculate_score(agent, model, inc_cap) 
-    #if t % 50 == 0 println("SE Score: ", score) end
-    #--- Debug Output ---
-    
-    #println("DEBUG [Month $t] Agent $(agent.id) | Income: $(agent.household_income)")
-    #println("U_eco: $(agent.u_eco) | U_soc: $(agent.u_soc) | U_env: $(agent.u_env)")
-    #println("Inc_Capability: $inc_cap | Final Score: $score")
-    #println("--------------------------------------------------")
-    
 
-    #debug SE Score and its components
-    #println("DEBUG [Month $t] Agent $(agent.id) | SE Score: $score | Attitude: $(model.w_eco * agent.u_eco + model.w_env * agent.u_env) | PBC: $inc_cap | Norm: $(agent.u_soc)")
-    #=
-
-    open("detailed_debug.csv", "a") do f
-        # Write header if it's the first step (optional, can be done manually)
-        if t == 0 && agent.id == 1
-            #println(f, "t,agent_id,income,u_eco,inc_capability,u_soc,u_env,final_score")
-        end
-        #println(f, "$t,$(agent.id),$(agent.household_income),$(agent.u_eco),$inc_capability,$(agent.u_soc),$(agent.u_env),$score")
-    end
-
-    =#
-    #println(model.adoption_threshold)
-    #println(score)
     # Adoption Decision
     if !agent.pv_installed && rand() < model.activation_prob
         if score > model.adoption_threshold
@@ -88,17 +55,13 @@ function agent_step!(agent::Household, model::AgentBasedModel)
         end
     end
 end
-
-function get_inc_capability(agent::Household, model::AgentBasedModel)
-    norm_income = clamp(agent.household_income / model.max_income, 0.0, 1.0)
-    max_barrier = 0.6
-    steepness = 4.0
-    mid_point = 0.8
-    normal = 600.0 / 553.0
+function get_inc_capability(income::Float64, max_income::Float64)
+    norm_income = clamp(income / max_income, 0.0, 1.0)
+    max_barrier = 1.0
+    steepness = 5.0
+    mid_point = 0.5
+    sigmoid = 1.0 / (1.0 + exp(-(norm_income - mid_point) * steepness)) 
     
-    # if the income is very low, we want a high inc_capability (close to max_barrier), and if it's high, we want it close to 0
-    sigmoid = 1.0 / (1.0 + exp(-((normal * norm_income) - mid_point) * steepness))
-    #println("DEBUG Agent $(agent.id) | Income: $(agent.household_income) | Normalized: $norm_income | Sigmoid: $sigmoid | Inc_Capability: $(max_barrier * (1.0 - sigmoid))")
     return max_barrier * (1.0 - sigmoid)
 end
 
@@ -116,75 +79,105 @@ end
 
 function calculate_score(agent::Household, model::AgentBasedModel, inc_cap::Float64)
     if model.decision_architecture_idx == 0 # RR
+        model.w_soc = 1.0 - (model.w_eco + model.w_env)
+        model.w_soc = max(0.0, model.w_soc)
         if agent.u_eco < inc_cap return 0.0 end
-       
+        
         if agent.u_eco > inc_cap   # so basically if income is higher, inc_cap is lower, so it is easier to get above it, the agent passes the step 
             return (model.w_eco * agent.u_eco + model.w_env * agent.u_env + model.w_soc * agent.u_soc) 
+        
+        
         end
+        
  else # SE Logic 
         
         # 1. Calculate the Utility of Attitude (u_att)
-        # Combination of economic and environmental utilities weighted by w
         u_att = (model.w_eco * agent.u_eco) + (model.w_env * agent.u_env) 
         
-        # 2. Calculate the Utility of Perceived Behavioral Control (u_pbc)
-        # Derived from the income barrier (inc_cap)
-        u_pbc = (1.0 - inc_cap) * model.w_eco
-        
-        # 3. Calculate the Internal Factor
-        # Balance between Attitude and PBC using importance factor i_att
+        # 2. PBC (The ability to afford it)
+        u_pbc = (1.0 - inc_cap) 
+
+        # 3. Internal Factor (Balance between wanting it and being able to)
         i_pbc = 1.0 - model.i_att
         internal_factor = (model.i_att * u_att) + (i_pbc * u_pbc)
         
-        # 4. Final Decision Score
-        # Weigh the Internal Factor against the Social Utility (u_soc) using i_soc
-        score = ((1.0 - model.w_soc) * internal_factor) + (model.w_soc * agent.u_soc)
-        
-        # --- Debugging ---
-        #=
-        println("--- DEBUG Agent $(agent.id) (Month $(abmtime(model))) ---")
-        println("Utilities:  [u_eco: $(round(agent.u_eco, digits=3)), u_env: $(round(agent.u_env, digits=3)), u_soc: $(round(agent.u_soc, digits=3))]")
-        println("Weights:    [w_eco: $(model.w_eco), w_env: $(model.w_env), w_soc: $(model.w_soc)]")
-        println("Factors:    [i_att: $(model.i_att), i_pbc: $(1.0 - model.i_att)]")
-        println("Results:    [u_att (Weighted Eco+Env): $(round(u_att, digits=3)), u_pbc: $(round(u_pbc, digits=3))]")
-        println("Final:      [Internal Factor: $(round(internal_factor, digits=3)) | Total Score: $(round(score, digits=3))]")
-        println("Threshold:  [Score: $(round(score, digits=3)) vs Threshold: $(model.adoption_threshold)]")
-        println("Decision:   $(score > model.adoption_threshold ? "PASS" : "FAIL")")
-        println("--------------------------------------------------")
-         =#   
+
+
+        effective_u_soc = agent.u_soc^0.5  # Makes the first few neighbors very impactful
+        score = ((1.0 - model.w_soc) * internal_factor) + (model.w_soc * effective_u_soc)
         return score
         
     end
 end
 
+function initialize_neighbors!(model::AgentBasedModel, radius::Float64)
+    for agent in allagents(model)
+        agent.neighbors = Int[n.id for n in nearby_agents(agent, model, radius)]
+    end
+    
+   
+end
 
-#function get_detailed_stats(model)
- #   agents = allagents(model)
-  #  N = nagents(model)
-    
-   # avg_u_eco = sum(a.u_eco for a in agents) / N
-    #avg_u_soc = sum(a.u_soc for a in agents) / N
-    #avg_u_env = sum(a.u_env for a in agents) / N
-    
-    # how many are within 0.1 of crossing it
  
-   # close_to_adoption = count(a -> !a.pv_installed && 
-  #                             calculate_score(a, model) > (model.adoption_threshold - 0.1), agents)
+function initialize_model(params::ModelParams; 
+    path_buildings="StPrex_Buildings_with_PV_Potential_and_HS.csv", 
+    path_income="st_prex_agents_536.csv")
     
- #   return (avg_u_eco, avg_u_soc, avg_u_env, close_to_adoption)
-#end
+    path_rachat="prix_rachat.csv"
+    path_elec="price_electricity.csv"
 
+    # Load series and main data
+    df_rachat = CSV.read(path_rachat, DataFrame; stripwhitespace = true)
+    df_elec = CSV.read(path_elec, DataFrame; stripwhitespace = true)
+    params.price_sell_series = df_rachat.Price_cts_kWh ./ 100.0
+    params.price_buy_series = df_elec.Price_cts_kWh ./ 100.0
 
+    df_buildings = CSV.read(path_buildings, DataFrame)
+    df_income = CSV.read(path_income, DataFrame)
+    df_buildings.income = df_income.salary_chf
+    params.max_income = maximum(df_buildings.income)
 
-#df = CSV.read("st_prex_agents_536.csv", DataFrame)
-#println(maximum(df.salary_chf))
+    min_x, max_x = minimum(df_buildings.x), maximum(df_buildings.x)
+    min_y, max_y = minimum(df_buildings.y), maximum(df_buildings.y)
 
-#real_avg = sum(a.co2_saving for a in allagents(model)) / nagents(model)
-#println(real_avg)
+    width, height = ceil(max_x - min_x + 2.0), ceil(max_y - min_y + 2.0)
 
+    space = ContinuousSpace((width, height); spacing = 1.0)
+    
+    
+    # agent_step! is now known because it was defined above
+    model = StandardABM(
+        Household, 
+        space; 
+        agent_step! = agent_step!, 
+        model_step! = model_step!,
+        properties = params,
+        warn = false
+    )
 
-t = @elapsed model = initialize_model(params)
-println("Initialization : $t secondes")
+    for row in eachrow(df_buildings)
+        pos = (row.x - min_x + 1.0, row.y - min_y + 1.0)
+        
+        val_year = row.BeginningOfOperation_Year
+        is_pre_installed = !ismissing(val_year) && val_year != -99 && val_year <= 2009
 
-t_sim = @elapsed run!(model, 360)
-println("Simulation : $t_sim secondes")
+        agent_co2 = Float64(row.PV_Pot * params.co2_factor)
+        
+        kwp = params.pv_efficiency * Float64(row.area_roof_solar_m2)
+        b_cost = ((5523.0 / (kwp^0.4862)) + 578.4  + (156.2 * exp(-0.2321 * kwp))) * kwp
+        
+        i_capability = get_inc_capability(Float64(row.income), params.max_income)
+
+        add_agent!(pos, model, (0.0, 0.0), 
+            Float64(row.area_roof_solar_m2), Float64(row.PV_Pot), Float64(row.income), 
+            is_pre_installed, 0.0, 0.0, 0.0, agent_co2, 
+            kwp, b_cost, i_capability,
+            Int[] # neighbors will be filled later
+            )
+    end
+    #max_co2 = maximum(a.co2_saving for a in allagents(model))
+    #println("Maximum CO2 potential saving in population: $max_co2 kg")
+    initialize_neighbors!(model, params.neighbors_radius)
+    model_step!(model) 
+    return model
+end

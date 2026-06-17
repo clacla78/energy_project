@@ -1,7 +1,8 @@
 using InteractiveDynamics
 using Agents
 using GLMakie
-
+#uncomment for vizualization of a single run
+#comment for calibration
 include("types.jl")
 include("model.jl")
 
@@ -22,11 +23,11 @@ interaction_params = Dict(
     :activation_prob => 0:0.001:1
 )
 
-
-# The value at t=0 comes from the agents' state right after initialization
 adoption_rate(m) = (count(a -> a.pv_installed, allagents(m)) / nagents(m)) * 100
 m_data = [adoption_rate] 
 
+
+#=
 agent_color(a) = a.pv_installed ? :green : :red
 agent_size(a) = a.pv_installed ? 12 : 7
 
@@ -36,6 +37,8 @@ function get_dynamic_title(m)
     year = 2009 + floor(Int, t/12)
     return "Architecture: $arch | Month: $t | Year: $year"
 end
+
+
 
 fig, abmobs = abmexploration(
     model;
@@ -77,4 +80,6 @@ end
 Label(fig[2, 1], "Historical Target: ~14% by 2024 (Month 180)", 
       tellwidth = false, font = :italic, color = :blue)
 
-display(fig)
+#display(fig)
+
+=#
